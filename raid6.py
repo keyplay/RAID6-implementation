@@ -36,11 +36,17 @@ class RAID6:
         self.strip = 0
         self.gf = GaloisField(num_data_disk=self.N, num_check_disk=self.M)
 
+        self.init_disk()
+
         print("Number of Data Disk: " + str(self.N))
         print("Number of Checksum Disk: " + str(self.M))
         print("Chunk Size: " + str(self.chunk_size) + " Bytes")
         print("==============================")
 
+    def init_disk(self):
+        """
+        Initialize disk of the RAID6 file system
+        """
         for i in range(self.D):
             directory = "Disk" + str(i)
             path = os.path.join(Config.DISK_PATH, directory)
@@ -51,54 +57,72 @@ class RAID6:
         """
         Clean the RAID6 disk
         """
-        for d in os.listdir(Config.DISK_PATH):
-            if "Disk" == d[:4]:
-                for f in os.listdir(os.path.join(Config.DISK_PATH, d)):
-                    os.remove(os.path.join(Config.DISK_PATH, d, f))
+        for i in range(self.D):
+            directory = "Disk" + str(i)
+            path = os.path.join(Config.DISK_PATH, directory)
+            if os.path.exists(path):
+                for f in os.listdir(path):
+                    os.remove(os.path.join(path, f))
+
+    def check_disk_exit(self):
+        """
+        check whether any disk lost
+        :return: the lost disk id, return [] if no disk lost
+        """
+        lost_disk = []
+        for i in range(self.D):
+            directory = "Disk" + str(i)
+            path = os.path.join(Config.DISK_PATH, directory)
+            if not os.path.exists(path):
+                lost_disk += [i]
+                print(directory + " is lost!")
+
+        return lost_disk
 
     def read_file(self, file):
         with open(file, 'rb') as f:
             self.input_file = list(f.read())
 
-    def compute_parity(self, data):
+    def compute_parity(self, padded_data):
         """
         Compute parity with Reed-Solomon Coding
             gf.vander : Vandermonde matrix, (M, N)
             data : 3-d matrix, (N, stripe_count, chunk_size)
         @return res : 3-d matrix, (M, stripe_count, chunk_size)
         """
-        F = self.gf.vander
-        D = data
-        res = np.zeros([F.shape[0], D.shape[1], D.shape[2]], dtype=int)
+        vm = self.gf.vander
+        res = np.zeros([vm.shape[0], padded_data.shape[1], padded_data.shape[2]], dtype=int)
         for i in range(res.shape[0]):
             for j in range(res.shape[1]):
                 for k in range(res.shape[2]):
-                    res[i][j][k] = self.gf.dot(F[i, :], D[:, j, k])
+                    res[i][j][k] = self.gf.dot(vm[i, :], padded_data[:, j, k])
 
         return res
 
-    def encode_data(self, data):
+    def pad_data(self, input_data):
         """
-        Store data into RAID6 file system
+        Pad 0s to the end of the input data
+        :param input_data: original data
         """
         # determine stripe count and pad 0 to the end of the file
         stripe_size = self.chunk_size * self.N
-        stripe_count = len(data) // stripe_size + 1
+        stripe_count = len(input_data) // stripe_size + 1
         self.strip = stripe_count
         stripe_size_byte = stripe_size * stripe_count
-        padding_size = stripe_size_byte - len(data)
-        padded_data = np.asarray(data + [0] * padding_size)
+        padding_size = stripe_size_byte - len(input_data)
+        padded_data = np.asarray(input_data + [0] * padding_size)
 
         # convert data into 3-d matrix, (N, stripe_count, chunk_size)
         padded_data = padded_data.reshape((stripe_count, self.N, self.chunk_size))
         padded_data = np.transpose(padded_data, (1, 0, 2))
 
-        # calculate parity (checksum): FD = C
-        parity = self.compute_parity(padded_data)
-        data_with_parity = np.concatenate((padded_data, parity), axis=0)
+        return padded_data
 
-        # write data into RAID6 disk
-        for i in range(stripe_count):
+    def write_to_disk(self, data_with_parity):
+        """
+        Write data to RAID6 disk
+        """
+        for i in range(self.strip):
             for j in range(self.D):
                 directory = "Disk" + str(j)
                 file = os.path.join(Config.DISK_PATH, directory, "chunk" + str(j) + str(i))
@@ -106,6 +130,18 @@ class RAID6:
                     chunk = bytes(data_with_parity[j, i, :].tolist())
                     f.write(chunk)
         print("Write successful")
+
+    def encode_data(self, input_data):
+        """
+        Store data into RAID6 file system
+        """
+        padded_data = self.pad_data(input_data)
+
+        # calculate parity (checksum): FD = C
+        parity = self.compute_parity(padded_data)
+        data_with_parity = np.concatenate((padded_data, parity), axis=0)
+
+        self.write_to_disk(data_with_parity)
 
     def read_disk_data(self, data_length):
         """
@@ -122,6 +158,39 @@ class RAID6:
 
         content = content[:data_length]
         return content
+
+    def check_disk_corruption(self):
+        """
+        Check whether any of the checksum disk is corrupted
+        """
+        user_data = np.zeros((self.N, self.strip, self.chunk_size), dtype=int)
+        checksum = np.zeros((self.M, self.strip, self.chunk_size), dtype=int)
+
+        # load data from RAID6 file system
+        for i in range(self.strip):
+            for j in range(self.N):
+                chunk_path = os.path.join(Config.DISK_PATH, "Disk" + str(j), "chunk" + str(j) + str(i))
+                with open(chunk_path, 'rb') as f:
+                    user_data[j, i, :] = np.asarray(list(f.read()))
+            for k in range(self.N, self.D):
+                chunk_path = os.path.join(Config.DISK_PATH, "Disk" + str(k), "chunk" + str(k) + str(i))
+                with open(chunk_path, 'rb') as f:
+                    checksum[k, i, :] = np.asarray(list(f.read()))
+
+        # generate new checksum
+        new_checksum = self.compute_parity(user_data)
+
+        # compare new checksum and old checksum
+        corrupted_chunk = []
+        for i in range(self.strip):
+            result = []
+            for j in range(self.M):
+                r = (new_checksum[j, i, :] == checksum[j, i, :])
+                if False in r:
+                    print("Chunk" + str(j+self.N) + str(i) + " Corrupted!")
+                    corrupted_chunk += ["Chunk" + str(j+self.N) + str(i)]
+
+        return corrupted_chunk
 
 
 if __name__ == "__main__":
