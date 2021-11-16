@@ -171,11 +171,13 @@ class RAID6:
             for j in range(self.N):
                 chunk_path = os.path.join(Config.DISK_PATH, "Disk" + str(j), "chunk" + str(j) + str(i))
                 with open(chunk_path, 'rb') as f:
-                    user_data[j, i, :] = np.asarray(list(f.read()))
+                    data_chunk = np.asarray(list(f.read()))
+                    user_data[j, i] = data_chunk
             for k in range(self.N, self.D):
                 chunk_path = os.path.join(Config.DISK_PATH, "Disk" + str(k), "chunk" + str(k) + str(i))
                 with open(chunk_path, 'rb') as f:
-                    checksum[k, i, :] = np.asarray(list(f.read()))
+                    chunk = np.asarray(list(f.read()))
+                    checksum[k-self.N, i] = chunk
 
         # generate new checksum
         new_checksum = self.compute_parity(user_data)
@@ -183,14 +185,33 @@ class RAID6:
         # compare new checksum and old checksum
         corrupted_chunk = []
         for i in range(self.strip):
-            result = []
+            failed_chunk = [] # store the failed chunk for i-th strip
             for j in range(self.M):
                 r = (new_checksum[j, i, :] == checksum[j, i, :])
                 if False in r:
                     print("Chunk" + str(j+self.N) + str(i) + " Corrupted!")
-                    corrupted_chunk += ["Chunk" + str(j+self.N) + str(i)]
+                    failed_chunk += ["Chunk" + str(j+self.N) + str(i)]
+            # Only store the failed chunk
+            if len(failed_chunk) > 0:
+                corrupted_chunk += [failed_chunk]
 
         return corrupted_chunk
+
+    def file_update(self):
+        """
+        Update the file in the RAID6 system
+        """
+        original_file = self.read_disk_data(len(self.input_file))
+        temp_path = os.path.join(Config.DISK_PATH, "temp.txt")
+        with open(temp_path, 'wb') as f:
+            chunk = bytes(original_file)
+            f.write(chunk)
+        print("Please update the file " + temp_path + " ...")
+        input("Press enter if file update is finished ...")
+
+        self.clean_disk()
+        self.read_file(temp_path)
+        self.encode_data(self.input_file)
 
 
 if __name__ == "__main__":
@@ -198,7 +219,9 @@ if __name__ == "__main__":
     raid6.clean_disk()
     raid6.read_file("data/sample.txt")
     raid6.encode_data(raid6.input_file)
-    data = raid6.read_disk_data(len(raid6.input_file))
-    print(bytes(data))
-
+    # data = raid6.read_disk_data(len(raid6.input_file))
+    # print(bytes(data))
+    # raid6.check_disk_exit()
+    # raid6.check_disk_corruption()
+    raid6.file_update()
 
