@@ -7,11 +7,8 @@ class Config:
     """
     NUM_DATA_DISK = 6
     NUM_CHECKSUM_DISK = 2
+    GF_DEGREE = 8
     CHUNK_SIZE = 16
     DISK_CAPACITY = 1024
     DISK_LAYER = DISK_CAPACITY // CHUNK_SIZE
     DISK_PATH = "data"
-
-
-
-
