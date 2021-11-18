@@ -5,7 +5,9 @@ from config import Config
 from ffield import GaloisField
 import os
 import numpy as np
-
+import time
+import matplotlib.pyplot as plt
+from shutil import copyfile
 
 class RAID6:
     """
@@ -29,6 +31,7 @@ class RAID6:
         """
         self.N = Config.NUM_DATA_DISK
         self.M = Config.NUM_CHECKSUM_DISK
+        self.gf_degree = Config.GF_DEGREE
         self.D = self.N + self.M
         self.chunk_size = Config.CHUNK_SIZE
         self.layer = Config.DISK_LAYER
@@ -36,7 +39,7 @@ class RAID6:
         self.strip = 0
         self.data_disk_list  = list(range(self.N))
         self.check_disk_list = list(range(self.N, self.N+self.M))
-        self.gf = GaloisField(num_data_disk=self.N, num_check_disk=self.M)
+        self.gf = GaloisField(num_data_disk=self.N, num_check_disk=self.M, w=self.gf_degree)
         
         self.init_disk()
         
@@ -158,7 +161,7 @@ class RAID6:
     def read_chunk_data(self, stripe_num, chunk_num):
         """
         Read data from specific chunk
-        :param stripe_num: chunk is in which stripe
+        :param stripe_num: chunk is in which strip
         :param chunk_num: read data from which chunk
         :return: read data
         """
@@ -181,9 +184,10 @@ class RAID6:
         content = content[:data_length]
         return content
 
-    def check_disk_corruption(self):
+    def check_strip_corruption(self):
         """
-        Check whether any of the checksum disk is corrupted
+        Check whether any of the strip is corrupted
+        :return corruption chunk list [(disk, strip)]
         """
         user_data = np.zeros((self.N, self.strip, self.chunk_size), dtype=int)
         checksum = np.zeros((self.M, self.strip, self.chunk_size), dtype=int)
@@ -193,25 +197,49 @@ class RAID6:
             for j in range(self.N):
                 chunk_path = os.path.join(Config.DISK_PATH, "Disk" + str(j), "chunk" + str(j) + str(i))
                 with open(chunk_path, 'rb') as f:
-                    user_data[j, i, :] = np.asarray(list(f.read()))
+                    data_chunk = np.asarray(list(f.read()))
+                    user_data[j, i] = data_chunk
             for k in range(self.N, self.D):
                 chunk_path = os.path.join(Config.DISK_PATH, "Disk" + str(k), "chunk" + str(k) + str(i))
                 with open(chunk_path, 'rb') as f:
-                    checksum[k, i, :] = np.asarray(list(f.read()))
+                    chunk = np.asarray(list(f.read()))
+                    checksum[k-self.N, i] = chunk
 
         # generate new checksum
         new_checksum = self.compute_parity(user_data)
-
+        
         # compare new checksum and old checksum
+        checksum_diff = self.gf.add(new_checksum[:2], checksum[:2])
         corrupted_chunk = []
         for i in range(self.strip):
-            for j in range(self.M):
-                r = (new_checksum[j, i, :] == checksum[j, i, :])
-                if False in r:
-                    print("Chunk" + str(j+self.N) + str(i) + " Corrupted!")
-                    corrupted_chunk += ["Chunk" + str(j+self.N) + str(i)]
+            idx_max = np.argmax(checksum_diff[0, i])
+            Pmax = checksum_diff[0, i][idx_max]
+            Qmax = checksum_diff[1, i][idx_max]
+            if Pmax > 0 and Qmax > 0:
+                z = self.gf.div(Qmax, Pmax)
+                corrupted_chunk += [(z-1, i)]
+            elif Pmax > 0:
+                corrupted_chunk += [(self.N, i)]
+            elif Qmax > 0:
+                corrupted_chunk += [(1+self.N, i)]
 
-        return corrupted_chunk    
+        return corrupted_chunk   
+
+    def file_update(self):
+        """
+        Update the file in the RAID6 system
+        """
+        original_file = self.read_disk_data(len(self.input_file))
+        temp_path = os.path.join(Config.DISK_PATH, "temp.txt")
+        with open(temp_path, 'wb') as f:
+            chunk = bytes(original_file)
+            f.write(chunk)
+        print("Please update the file " + temp_path + " ...")
+        input("Press enter if file update is finished ...")
+        
+        self.clean_all_disk()
+        self.read_file(temp_path)
+        self.encode_data(self.input_file)
 
     def rebuild_stripe_data(self, stripe_num, chunk_list):
         '''rebuild data from corrupted chunk
@@ -222,9 +250,9 @@ class RAID6:
         
         #input("\nPress Enter to rebuild lost data ...\n")
 
-        if len(chunk_list) > self.D:
+        if len(chunk_list) > self.M:
             print("failed to rebuild data")
-            return -1
+            return False
 
         left_data = []
         left_parity = []
@@ -253,38 +281,98 @@ class RAID6:
                 to_write = bytes(E[i,:].tolist())
                 f.write(to_write)
         
-        print("rebuild data successfully\n")
+        #print("rebuild data successfully\n")
+        return True
         
     def rebuild_disk_data(self, disk_list):
         '''rebuild data from corrupted disk
         :param disk_list: corrupted disk
         :return: None
         '''
-        if len(disk_list) > self.D:
+        if len(disk_list) > self.M:
             print("failed to rebuild data")
-            return -1
+            return False
         
-        for stripe_num in range(self.N):
+        for stripe_num in range(self.strip):
             self.rebuild_stripe_data(stripe_num, disk_list)
+            
+        return True
             
             
 if __name__ == "__main__":
-    raid6 = RAID6()
-    raid6.clean_all_disk()
-    raid6.read_file("data/sample.txt")
-    raid6.encode_data(raid6.input_file)
-    data = raid6.read_disk_data(len(raid6.input_file))
-    print(bytes(data))
+    Config.NUM_CHECKSUM_DISK = 12
+    Config.NUM_DATA_DISK = 4
+    write_time_list = []
+    read_time_list = []
+    disk_recover_time_list = []
+    strip_recover_time_list = []
+    chunk_size_list = []
+    strip_num_list = []
+    for i in range(2,9):
+        Config.CHUNK_SIZE = 2**i
+        chunk_size_list.append(Config.CHUNK_SIZE)
+        raid6 = RAID6()
+        raid6.clean_all_disk()
+        raid6.read_file("data/test.jpg")
+        
+        t1 = time.time()
+        raid6.encode_data(raid6.input_file)
+        write_time_list.append(time.time() - t1)
+        
+        strip_num_list.append(raid6.strip)
+        
+        t1 = time.time()
+        data = raid6.read_disk_data(len(raid6.input_file))
+        #print(bytes(data))
+        read_time_list.append(time.time() - t1)
+        
+        clean_list = [0]
+        raid6.clean_disk(clean_list)
+        t1 = time.time()
+        recover_flag = raid6.rebuild_disk_data(clean_list)
+        disk_recover_time_list.append(time.time() - t1)
+        if recover_flag:  
+            rebuild_data = raid6.read_disk_data(len(raid6.input_file))
+            #print(bytes(rebuild_data))
+            print('Rebuild disk flag:', rebuild_data == data)
+            
     
-    clean_list = [0]
-    raid6.clean_disk(clean_list)
-    raid6.rebuild_disk_data(clean_list)
+        # single strip corruption detection and recover
+        # input("\nPress Enter after replace data ...\n")
+        copyfile(os.path.join(Config.DISK_PATH, 'Disk1', 'chunk11'), os.path.join(Config.DISK_PATH, 'Disk1', 'chunk10'))
+        t1 = time.time()
+        corrupted_chunk = raid6.check_strip_corruption()
+        for chunk in corrupted_chunk:
+            raid6.rebuild_stripe_data(chunk[1], [chunk[0]])
+        strip_recover_time_list.append(time.time() - t1)
+        print('Rebuild chunk list:', corrupted_chunk)
+        rebuild_data = raid6.read_disk_data(len(raid6.input_file))
+        print('Rebuild strip flag:', rebuild_data == data)
+        
+        raid6.file_update()
+        update_data = raid6.read_disk_data(len(raid6.input_file))
     
-    rebuild_data = raid6.read_disk_data(len(raid6.input_file))
-    print(bytes(data))
-
-    print('Rebuild flag:', rebuild_data == data)
-
-    input("\nPress Enter after delect data ...\n")
-    #corrupted_chunk = raid6.check_disk_corruption()  # bug exists
-    #raid6.rebuild_stripe_data(0, clean_list)
+    # performance plot
+    plt.figure()
+    plt.plot(chunk_size_list, strip_recover_time_list)
+    plt.xlabel("Chunk Size (Bytes)")
+    plt.ylabel("Time (Seconds)")
+    plt.savefig('single_strip_corruption_time_datanum_'+str(Config.NUM_DATA_DISK)+'_checksum_'+str(Config.NUM_CHECKSUM_DISK)+'.jpg')
+    plt.close()
+    
+    plt.figure()
+    plt.plot(chunk_size_list, read_time_list, label='read')
+    plt.plot(chunk_size_list, write_time_list, label='write')
+    plt.plot(chunk_size_list, disk_recover_time_list, label='recover')
+    plt.legend()
+    plt.xlabel("Chunk Size (Bytes)")
+    plt.ylabel("Time (Seconds)")
+    plt.savefig('total_time_datanum_'+str(Config.NUM_DATA_DISK)+'_checksum_'+str(Config.NUM_CHECKSUM_DISK)+'.jpg')   
+    plt.close()
+    
+    plt.figure()
+    plt.plot(chunk_size_list, strip_num_list)
+    plt.xlabel("Chunk Size (Bytes)")
+    plt.ylabel("Time (Seconds)")
+    plt.savefig('strip_num_datanum_'+str(Config.NUM_DATA_DISK)+'_checksum_'+str(Config.NUM_CHECKSUM_DISK)+'.jpg')   
+    plt.close()
