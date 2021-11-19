@@ -80,11 +80,8 @@ class GaloisField(object):
         '''
         n %= self.x_to_w - 1
         res = 1
-        while True:
-            if n == 0:
-                break
-            res = self.mult(a, res)
-            n -= 1            
+        for i in range(n):
+            res = self.mult(a, res)           
         return res
     
     def dot(self, v1, v2):
