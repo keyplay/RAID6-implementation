@@ -37,8 +37,7 @@ class GaloisField(object):
     def add(self, a, b):
         '''add is xor
         '''
-        sum = a ^ b
-        return sum
+        return a ^ b
 
     def sub(self, a, b):
         '''Subtraction is the same as add
