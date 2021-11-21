@@ -373,6 +373,6 @@ if __name__ == "__main__":
     plt.figure()
     plt.plot(chunk_size_list, strip_num_list)
     plt.xlabel("Chunk Size (Bytes)")
-    plt.ylabel("Time (Seconds)")
-    plt.savefig('strip_num_datanum_'+str(Config.NUM_DATA_DISK)+'_checksum_'+str(Config.NUM_CHECKSUM_DISK)+'.jpg')   
+    plt.ylabel("Number of Stripe")
+    plt.savefig('stripe_num_datanum_'+str(Config.NUM_DATA_DISK)+'_checksum_'+str(Config.NUM_CHECKSUM_DISK)+'.jpg')   
     plt.close()
