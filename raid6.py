@@ -300,8 +300,8 @@ class RAID6:
             
             
 if __name__ == "__main__":
-    Config.NUM_CHECKSUM_DISK = 12
-    Config.NUM_DATA_DISK = 4
+    clean_list = [0]   # remove disk 0
+    
     write_time_list = []
     read_time_list = []
     disk_recover_time_list = []
@@ -326,7 +326,6 @@ if __name__ == "__main__":
         #print(bytes(data))
         read_time_list.append(time.time() - t1)
         
-        clean_list = [0]
         raid6.clean_disk(clean_list)
         t1 = time.time()
         recover_flag = raid6.rebuild_disk_data(clean_list)
