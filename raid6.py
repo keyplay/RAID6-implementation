@@ -221,7 +221,8 @@ if __name__ == "__main__":
     raid6.encode_data(raid6.input_file)
     # data = raid6.read_disk_data(len(raid6.input_file))
     # print(bytes(data))
-    # raid6.check_disk_exit()
     # raid6.check_disk_corruption()
-    raid6.file_update()
+    # raid6.check_disk_exit()
+    raid6.check_disk_corruption()
+    # raid6.file_update()
 
