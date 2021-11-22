@@ -37,6 +37,6 @@ This file implementing the controller of the RAID6 system, which support:
 8. file update by user
 
 ## Running
-running the RAID6 system by using:
+running the RAID6 system by using command:
 
 `> python raid6.py`
